@@ -1,7 +1,12 @@
-use bevy::prelude::Resource;
-use crate::components::UIWindow;
+use bevy::prelude::*;
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct DraggedWindow{
-    pub window: Option<UIWindow>,
+    pub window: Option<Entity>,
+}
+
+
+#[derive(Resource, Default)]
+pub struct UIResources{
+    pub window_close_button: Handle<Image>
 }

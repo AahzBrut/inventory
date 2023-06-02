@@ -1,4 +1,5 @@
 #![allow(
+clippy::module_name_repetitions,
 clippy::missing_panics_doc,
 clippy::needless_pass_by_value,
 clippy::type_complexity
@@ -9,8 +10,8 @@ use bevy::prelude::*;
 use bevy::window::{PresentMode, PrimaryWindow, WindowResolution};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
-use crate::components::UIWindow;
-use crate::resources::DraggedWindow;
+use crate::components::{EntityRef, UICloseButton, UIHeader, UIWindow};
+use crate::resources::{DraggedWindow, UIResources};
 
 mod components;
 mod resources;
@@ -33,6 +34,7 @@ fn main() {
                 ..default()
             }))
         .add_plugin(WorldInspectorPlugin::new())
+        .add_startup_system(load_resources.in_base_set(StartupSet::PreStartup))
         .add_startup_system(spawn_camera)
         .add_startup_system(spawn_inventory_window)
         .add_startup_system(spawn_character_window)
@@ -43,7 +45,7 @@ fn main() {
 
 pub fn drag_window(
     mut last_position: Local<Vec2>,
-    mut dragged_window_query: Query<(&mut Style, &UIWindow), Without<Interaction>>,
+    mut all_windows_query: Query<(Entity, &mut Style), (With<UIWindow>, Without<Interaction>)>,
     dragged_window: Res<DraggedWindow>,
     window_query: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -55,30 +57,32 @@ pub fn drag_window(
         }
         let mut delta = cursor_position - *last_position;
         delta.y = -delta.y;
-        dragged_window_query.for_each_mut(|(mut style, &ui_window)| {
-            if ui_window == dragged_window.window.unwrap() {
-                style.position.left.try_add_assign(Val::Px(delta.x)).unwrap();
-                style.position.top.try_add_assign(Val::Px(delta.y)).unwrap();
-            }
-        });
+        if let Some(window_entity) = dragged_window.window {
+            all_windows_query.for_each_mut(|(entity, mut style)| {
+                if window_entity == entity {
+                    style.position.left.try_add_assign(Val::Px(delta.x)).unwrap();
+                    style.position.top.try_add_assign(Val::Px(delta.y)).unwrap();
+                }
+            });
+        }
         *last_position = cursor_position;
     }
 }
 
 pub fn start_drag_window(
     mut dragged_window: ResMut<DraggedWindow>,
-    mut windows_query: Query<(&mut ZIndex, &UIWindow), Without<Interaction>>,
-    ui_window_query: Query<(&Interaction, &UIWindow), Changed<Interaction>>,
+    mut windows_query: Query<(Entity, &mut ZIndex), (Without<Interaction>, With<UIWindow>)>,
+    ui_window_query: Query<(&Interaction, &EntityRef), (Changed<Interaction>, With<UIHeader>)>,
 ) {
-    if let Ok((interaction, &window)) = ui_window_query.get_single() {
+    if let Ok((interaction, &EntityRef(root_window))) = ui_window_query.get_single() {
         match interaction {
             Interaction::Clicked => {
-                dragged_window.window = Some(window);
-                update_z_indexes(&mut windows_query, window);
+                dragged_window.window = Some(root_window);
+                update_z_indexes(&mut windows_query, root_window);
             }
             Interaction::Hovered | Interaction::None => {
                 if let Some(current_window) = dragged_window.window {
-                    if current_window != window { return; }
+                    if current_window != root_window { return; }
                 }
                 dragged_window.window = None;
             }
@@ -86,27 +90,29 @@ pub fn start_drag_window(
     }
 }
 
-fn update_z_indexes(windows_query: &mut Query<(&mut ZIndex, &UIWindow), Without<Interaction>>, window: UIWindow) {
+fn update_z_indexes(
+    windows_query: &mut Query<(Entity, &mut ZIndex), (Without<Interaction>, With<UIWindow>)>,
+    root_window: Entity) {
     let win_count = i32::try_from(windows_query.iter().count()).unwrap();
-    let win_z_map = get_sorted_windows_map(windows_query, window);
-    windows_query.for_each_mut(|(mut z_index, &window_type)| {
-        if window_type == window {
+    let win_z_map = get_sorted_windows_map(windows_query, root_window);
+    windows_query.for_each_mut(|(entity, mut z_index)| {
+        if root_window == entity {
             *z_index = ZIndex::Global(win_count);
         } else {
-            *z_index = ZIndex::Global(*win_z_map.get(&window_type).unwrap());
+            *z_index = ZIndex::Global(*win_z_map.get(&entity).unwrap());
         }
     });
 }
 
 fn get_sorted_windows_map(
-    windows_query: &mut Query<(&mut ZIndex, &UIWindow), Without<Interaction>>,
-    window: UIWindow
-) -> HashMap<UIWindow, i32> {
+    windows_query: &mut Query<(Entity, &mut ZIndex), (Without<Interaction>, With<UIWindow>)>,
+    window: Entity,
+) -> HashMap<Entity, i32> {
     let mut windows_z = windows_query.iter()
-        .filter(|(&z, &w)| { w != window && matches!(z, ZIndex::Global(_))})
-        .map(|(z, w)| {
+        .filter(|(e, &z)| { *e != window && matches!(z, ZIndex::Global(_)) })
+        .map(|(e, z)| {
             if let ZIndex::Global(z) = z {
-                (*w, *z)
+                (e, *z)
             } else {
                 panic!("ZIndex::Local found.")
             }
@@ -119,32 +125,58 @@ fn get_sorted_windows_map(
         *z = new_index;
         new_index += 1;
     }
-    windows_z.iter().map(|(w, z)| { (*w, *z) }).collect::<HashMap<_, _>>()
+    windows_z.iter().map(|(e, z)| { (*e, *z) }).collect::<HashMap<_, _>>()
 }
 
 pub fn spawn_inventory_window(
     mut commands: Commands,
+    resources: Res<UIResources>,
 ) {
     commands.spawn((NodeBundle {
         style: Style {
             position_type: PositionType::Absolute,
             size: Size::all(Val::Px(300.0)),
             position: UiRect::new(Val::Px(100.0), Val::Auto, Val::Px(100.0), Val::Auto),
+            border: UiRect::all(Val::Px(2.0)),
             ..default()
         },
-        background_color: Color::GREEN.into(),
+        background_color: Color::hex("594C29").unwrap().into(),
         z_index: ZIndex::Global(1),
         ..default()
     },
                     UIWindow::InventoryWindow,
                     Name::from("Inventory window"),
     )).with_children(|parent| {
-        spawn_window_header(parent, 300.0, 24.0, UIWindow::InventoryWindow);
+        let root_window = EntityRef(parent.parent_entity());
+        parent.spawn(NodeBundle {
+            style: Style {
+                size: Size::all(Val::Percent(100.0)),
+                ..default()
+            },
+            background_color: Color::BLACK.into(),
+            ..default()
+        }).with_children(|parent| {
+            parent.spawn(NodeBundle {
+                style: Style {
+                    size: Size::new(Val::Percent(100.0), Val::Px(32.0)),
+                    ..default()
+                },
+                background_color: Color::GREEN.into(),
+                ..default()
+            }).with_children(|parent| {
+                spawn_window_header(
+                    parent,
+                    32.0,
+                    root_window,
+                    &resources);
+            });
+        });
     });
 }
 
 pub fn spawn_character_window(
     mut commands: Commands,
+    resources: Res<UIResources>,
 ) {
     commands.spawn((NodeBundle {
         style: Style {
@@ -160,44 +192,53 @@ pub fn spawn_character_window(
                     UIWindow::CharacterWindow,
                     Name::from("Character window"),
     )).with_children(|parent| {
-        spawn_window_header(parent, 300.0, 24.0, UIWindow::CharacterWindow);
+        let root_window = EntityRef(parent.parent_entity());
+        spawn_window_header(
+            parent,
+            32.0,
+            root_window,
+            &resources);
     });
 }
 
 fn spawn_window_header(
     parent: &mut ChildBuilder,
-    header_width: f32,
     header_height: f32,
-    window_type: UIWindow,
+    root_window: EntityRef,
+    resources: &UIResources,
 ) {
     parent.spawn(NodeBundle {
         style: Style {
-            size: Size::new(Val::Px(header_width), Val::Px(header_height)),
+            size: Size::new(Val::Percent(100.0), Val::Px(header_height)),
             ..default()
         },
         ..default()
     }).with_children(|parent| {
         parent.spawn((NodeBundle {
             style: Style {
-                size: Size::new(Val::Px(header_width - header_height), Val::Px(header_height)),
+                size: Size::new(Val::Percent(100.0), Val::Px(header_height)),
                 ..default()
             },
             background_color: Color::GRAY.into(),
             ..default()
         },
                       Interaction::None,
-                      window_type,
+                      UIHeader,
+                      root_window,
         ));
-        parent.spawn((NodeBundle {
+        parent.spawn((ImageBundle {
             style: Style {
+                flex_shrink: 0.0,
+                flex_grow: 0.0,
                 size: Size::new(Val::Px(header_height), Val::Px(header_height)),
                 ..default()
             },
-            background_color: Color::RED.into(),
+            image: resources.window_close_button.clone().into(),
             ..default()
         },
                       Interaction::None,
-                      window_type
+                      UICloseButton,
+                      root_window
         ));
     });
 }
@@ -212,4 +253,15 @@ pub fn spawn_camera(
         transform: Transform::from_xyz(window.width() * 0.5, window.height() * 0.5, 0.0),
         ..default()
     });
+}
+
+pub fn load_resources(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    commands.insert_resource(
+        UIResources {
+            window_close_button: asset_server.load("ui/buttons/CloseButton.png"),
+        }
+    );
 }
