@@ -6,7 +6,7 @@ pub struct DraggedWindow{
 }
 
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct UIResources{
     pub window_close_button: Handle<Image>
 }
